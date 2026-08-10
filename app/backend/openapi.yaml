@@ -1,0 +1,268 @@
+openapi: 3.1.0
+info:
+  title: LOOP Workflow API
+  version: 1.0.0
+  description: >-
+    Authenticated Cloud Run API for turning time-bound community capacity into
+    reviewed, human-approved response plans and verified impact receipts.
+servers:
+  - url: https://YOUR_CLOUD_RUN_URL
+security:
+  - FirebaseBearer: []
+paths:
+  /healthz:
+    get:
+      security: []
+      summary: Service health check
+      responses:
+        '200':
+          description: Service is available
+  /openapi.yaml:
+    get:
+      security: []
+      summary: Download this OpenAPI document
+      responses:
+        '200':
+          description: OpenAPI YAML document
+  /v1/organizations:
+    post:
+      summary: Create an organization and assign the caller as its first admin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [organizationId, name]
+              properties:
+                organizationId: { type: string, example: northside-outreach }
+                name: { type: string, example: Northside Outreach }
+      responses:
+        '201': { description: Organization created }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '409': { description: Organization ID already exists }
+  /v1/members:
+    post:
+      summary: Add or update a member role
+      description: Requires the admin role.
+      parameters: [{ $ref: '#/components/parameters/OrganizationId' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [uid, role]
+              properties:
+                uid: { type: string }
+                role: { type: string, enum: [viewer, contributor, coordinator, admin] }
+      responses:
+        '200': { description: Member saved }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /v1/intake/forwarded-email:
+    post:
+      summary: Extract capacity from forwarded email text
+      description: Contributors, coordinators, and admins may submit intake.
+      parameters: [{ $ref: '#/components/parameters/OrganizationId' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [subject, body]
+              properties:
+                subject: { type: string, example: '40 meals available until 8 PM' }
+                body: { type: string }
+      responses:
+        '201':
+          description: Intake and pending offers created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/IntakeResult' }
+  /v1/gmail/import:
+    post:
+      summary: Import and extract a Gmail message
+      description: Uses a caller-provided, short-lived Gmail read-only OAuth token; the token is not persisted.
+      parameters: [{ $ref: '#/components/parameters/OrganizationId' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [gmailAccessToken, messageId]
+              properties:
+                gmailAccessToken: { type: string, writeOnly: true }
+                messageId: { type: string }
+      responses:
+        '201':
+          description: Intake and pending offers created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/IntakeResult' }
+  /v1/gmail/sync:
+    post:
+      security: []
+      summary: Automatically import unread messages from LOOP's intake mailbox
+      description: >-
+        Scheduler-only endpoint. The recipient must be plus-addressed as
+        intake+ORGANIZATION_ID@YOUR_DOMAIN so the service can route the
+        imported message to the correct organization.
+      parameters: [{ $ref: '#/components/parameters/WorkerKey' }]
+      responses:
+        '200':
+          description: Inbox messages were imported, skipped, or reported as failed
+        '401': { description: Missing or invalid worker key }
+  /v1/needs:
+    post:
+      summary: Create a community need
+      description: Requires coordinator or admin role.
+      parameters: [{ $ref: '#/components/parameters/OrganizationId' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/NeedInput' }
+      responses:
+        '201': { description: Need created }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /v1/offers/{offerId}/review:
+    patch:
+      summary: Approve or reject extracted capacity
+      description: Requires coordinator or admin role.
+      parameters:
+        - { $ref: '#/components/parameters/OrganizationId' }
+        - name: offerId
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status: { type: string, enum: [approved, rejected] }
+      responses:
+        '200': { description: Review recorded }
+        '404': { description: Offer not found }
+  /v1/response-plans:
+    post:
+      summary: Generate a proposed response plan from approved capacity
+      description: Gemini may select only approved offers; returned IDs are validated before persistence.
+      parameters: [{ $ref: '#/components/parameters/OrganizationId' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [needId]
+              properties:
+                needId: { type: string }
+      responses:
+        '201':
+          description: Proposed plan created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ResponsePlan' }
+        '409': { description: No approved capacity is available }
+  /v1/response-plans/{planId}/approve:
+    post:
+      summary: Human-approve a proposed response plan
+      description: Requires coordinator or admin role.
+      parameters:
+        - { $ref: '#/components/parameters/OrganizationId' }
+        - { $ref: '#/components/parameters/PlanId' }
+      responses:
+        '200': { description: Plan approved }
+        '409': { description: Plan is not proposed }
+  /v1/response-plans/{planId}/activate:
+    post:
+      summary: Activate an approved response plan and create an impact receipt
+      description: A plan must be explicitly human-approved before this transition.
+      parameters:
+        - { $ref: '#/components/parameters/OrganizationId' }
+        - { $ref: '#/components/parameters/PlanId' }
+      responses:
+        '200': { description: Plan activated and receipt created }
+        '409': { description: Plan is not approved }
+components:
+  securitySchemes:
+    FirebaseBearer:
+      type: http
+      scheme: bearer
+      bearerFormat: Firebase ID token
+  parameters:
+    OrganizationId:
+      name: X-Loop-Organization-Id
+      in: header
+      required: true
+      schema: { type: string, pattern: '^[A-Za-z0-9_-]{3,80}$' }
+    PlanId:
+      name: planId
+      in: path
+      required: true
+      schema: { type: string }
+    WorkerKey:
+      name: X-Loop-Worker-Key
+      in: header
+      required: true
+      schema: { type: string, writeOnly: true }
+  responses:
+    Unauthenticated:
+      description: Firebase ID token is missing or invalid
+    Forbidden:
+      description: Caller is not an active member or does not have the required role
+  schemas:
+    NeedInput:
+      type: object
+      required: [title, organization, locationLabel, timeWindow]
+      properties:
+        title: { type: string }
+        organization: { type: string }
+        locationLabel: { type: string }
+        people: { type: integer, minimum: 0 }
+        priority: { type: string, enum: [high, medium, low] }
+        timeWindow: { type: string }
+        constraints: { type: string }
+    Resource:
+      type: object
+      required: [type, title, quantity, availabilityLabel]
+      properties:
+        type: { type: string, enum: [meals, space, transport, volunteer, other] }
+        title: { type: string }
+        quantity: { type: number }
+        availabilityLabel: { type: string }
+        locationLabel: { type: string }
+        accessibility: { type: string }
+        conditions: { type: string }
+    IntakeResult:
+      type: object
+      properties:
+        intakeId: { type: string }
+        offerIds: { type: array, items: { type: string } }
+        extraction:
+          type: object
+          properties:
+            summary: { type: string }
+            resources: { type: array, items: { $ref: '#/components/schemas/Resource' } }
+    ResponsePlan:
+      type: object
+      properties:
+        responsePlanId: { type: string }
+        resources: { type: array, items: { type: string } }
+        reasoning: { type: string }
+        originLabel: { type: string }
+        destinationLabel: { type: string }
+        status: { type: string, example: proposed }
+        estimatedImpact:
+          type: object
+          properties:
+            mealsRedirected: { type: number }
+            warmSpaceHours: { type: number }
+            peopleSupported: { type: number }
+            wasteAvoidedKg: { type: number }

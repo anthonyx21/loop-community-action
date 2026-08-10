@@ -1,0 +1,9 @@
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args: [build, -t, '${_REGION}-docker.pkg.dev/$PROJECT_ID/loop/loop-workflow-api:$COMMIT_SHA', .]
+  - name: gcr.io/cloud-builders/docker
+    args: [push, '${_REGION}-docker.pkg.dev/$PROJECT_ID/loop/loop-workflow-api:$COMMIT_SHA']
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    args: [gcloud, run, deploy, loop-workflow-api, --image, '${_REGION}-docker.pkg.dev/$PROJECT_ID/loop/loop-workflow-api:$COMMIT_SHA', --region, '${_REGION}', --service-account, 'loop-workflow-api@$PROJECT_ID.iam.gserviceaccount.com', --set-secrets, 'GEMINI_API_KEY=loop-gemini-api-key:latest', --set-env-vars, 'GOOGLE_CLOUD_PROJECT=$PROJECT_ID']
+substitutions:
+  _REGION: northamerica-northeast2

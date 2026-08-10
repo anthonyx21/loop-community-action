@@ -1,0 +1,21 @@
+# Environment secrets
+.env
+.env.local
+.env.*.local
+!.env.sample
+
+# Dependencies and build output
+node_modules/
+dist/
+coverage/
+
+# Firebase and Google Cloud local state
+.firebase/
+firebase-debug.log
+gcloud-debug.log
+
+# Logs and operating-system/editor files
+*.log
+.DS_Store
+.vscode/
+.idea/
